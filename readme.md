@@ -57,9 +57,9 @@ Used Matplotlib to visualize the best routes after optimization.
 ## How to Run
 
 Install required dependencies:
-
+```
 pip install matplotlib deap
-
+```
 Run the notebook:
 
 Open the Jupyter Notebook file VRP_Solution_Code.ipynb.
