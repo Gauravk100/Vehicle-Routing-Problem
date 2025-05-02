@@ -4,3 +4,4 @@ numpy
 deap
 pandas  
 folium
+streamlit-folium
