@@ -5,3 +5,5 @@ deap
 pandas  
 folium
 streamlit-folium
+python-dotenv
+requests
