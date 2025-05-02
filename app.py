@@ -1,122 +1,145 @@
-import random
-import numpy as np
-import matplotlib.pyplot as plt
 import streamlit as st
-import pandas as pd
-from deap import base, creator, tools, algorithms
-import io
+import folium
+from streamlit_folium import st_folium
+import requests
+import os
 
-st.set_page_config(layout="wide")
-st.title("Vehicle Routing Problem (VRP) Solver - Genetic Algorithm")
+from dotenv import load_dotenv
 
-# --- Sidebar Inputs ---
-with st.sidebar:
-    st.header("Problem Settings")
-    use_custom_locations = st.checkbox("Enter Custom Locations (Lat, Lon)", value=False)
-    num_locations = st.slider("Number of Locations", 5, 50, 20)
-    num_vehicles = st.slider("Number of Vehicles", 1, 10, 3)
-    random_seed = st.number_input("Random Seed", value=42)
+load_dotenv()
 
-# --- Location Generation ---
-random.seed(random_seed)
-if use_custom_locations:
-    st.subheader("Enter Coordinates")
-    custom_data = st.text_area("Paste lat, lon (one per line)", "12.97, 77.59\n13.01, 77.64\n13.05, 77.53")
-    try:
-        locations = [tuple(map(float, line.strip().split(","))) for line in custom_data.strip().splitlines()]
-        num_locations = len(locations)
-    except:
-        st.error("Invalid format. Use: latitude, longitude per line.")
-        st.stop()
-else:
-    locations = [(random.uniform(12.9, 13.1), random.uniform(77.5, 77.7)) for _ in range(num_locations)]
+MAPBOX_ACCESS_TOKEN = os.getenv("MAPBOX_ACCESS_TOKEN")
 
-depot = (13.0, 77.6)
+def get_route(start, end):
+    url = f"https://api.mapbox.com/directions/v5/mapbox/driving/{start[1]},{start[0]};{end[1]},{end[0]}?access_token={MAPBOX_ACCESS_TOKEN}&geometries=geojson"
+    response = requests.get(url)
+    data = response.json()
+    return data
 
-# --- Distance Matrix ---
-def compute_distance_matrix(locations):
-    return np.round([[np.linalg.norm(np.array(a) - np.array(b)) for b in locations] for a in locations], 2)
 
-# --- GA Setup ---
-creator.create("FitnessMin", base.Fitness, weights=(-1.0, -1.0))
-creator.create("Individual", list, fitness=creator.FitnessMin)
+st.title("Vehicle Routing Problem with Mapbox")
 
-toolbox = base.Toolbox()
-toolbox.register("indices", random.sample, range(num_locations), num_locations)
-toolbox.register("individual", tools.initIterate, creator.Individual, toolbox.indices)
-toolbox.register("population", tools.initRepeat, list, toolbox.individual)
+# Ask user for the number of locations and vehicles
+num_locations = st.number_input("Enter the number of locations (excluding depot):", min_value=1, value=5, step=1)
+num_vehicles = st.number_input("Enter the number of vehicles:", min_value=1, value=2, step=1)
 
-def evalVRP(individual):
-    total_distance = 0
-    distances = []
-    for i in range(num_vehicles):
-        route = [depot] + [locations[individual[j]] for j in range(i, len(individual), num_vehicles)] + [depot]
-        vehicle_dist = sum(np.linalg.norm(np.array(route[k+1]) - np.array(route[k])) for k in range(len(route)-1))
-        total_distance += vehicle_dist
-        distances.append(vehicle_dist)
-    balance_penalty = np.std(distances)
-    return total_distance, balance_penalty
+# Input for depot location
+st.subheader("Depot Location (Start/End Point)")
+depot_lat = st.number_input("Depot Latitude:", value=50.0, format="%.6f")
+depot_lon = st.number_input("Depot Longitude:", value=10.0, format="%.6f")
+depot = (depot_lat, depot_lon)
 
-toolbox.register("evaluate", evalVRP)
-toolbox.register("mate", tools.cxPartialyMatched)
-toolbox.register("mutate", tools.mutShuffleIndexes, indpb=0.05)
-toolbox.register("select", tools.selTournament, tournsize=3)
+# Input for each location
+locations = []
+st.subheader("Locations")
+for i in range(num_locations):
+    st.write(f"Location {i+1}")
+    lat = st.number_input(f"Latitude {i+1}:", key=f"lat_{i}", format="%.6f")
+    lon = st.number_input(f"Longitude {i+1}:", key=f"lon_{i}", format="%.6f")
+    locations.append((lat, lon))
 
-# --- Route Plot ---
-def plot_routes(individual):
-    fig, ax = plt.subplots()
-    for x, y in locations:
-        ax.plot(x, y, 'bo')
-    ax.plot(depot[0], depot[1], 'rs')
-    for i in range(num_vehicles):
-        route = [depot] + [locations[individual[j]] for j in range(i, len(individual), num_vehicles)] + [depot]
-        xs, ys = zip(*route)
-        ax.plot(xs, ys, '-', label=f'Vehicle {i+1}')
-    ax.set_title("Optimized Routes")
-    ax.legend()
-    return fig
+# Display the locations
+st.write("### Locations:")
+for i, loc in enumerate(locations):
+    st.write(f"Location {i+1}: {loc}")
 
-# --- Run GA ---
-if st.button("Solve VRP"):
-    with st.spinner("Optimizing routes..."):
-        pop = toolbox.population(n=300)
-        hof = tools.HallOfFame(1)
-        stats = tools.Statistics(lambda ind: ind.fitness.values)
-        stats.register("avg", np.mean)
-        stats.register("min", np.min)
+# Initialize session state for storing routes if it doesn't exist
+if 'calculated_routes' not in st.session_state:
+    st.session_state.calculated_routes = None
 
-        algorithms.eaSimple(pop, toolbox, 0.7, 0.2, 300, stats=stats, halloffame=hof, verbose=False)
+# Plot the locations on a map
+m = folium.Map(location=depot, zoom_start=6)
 
-    st.success("Optimization Complete!")
-    fig = plot_routes(hof[0])
-    st.pyplot(fig)
+# Add depot marker
+folium.Marker(location=depot, popup="Depot", icon=folium.Icon(color='red')).add_to(m)
 
-    # --- Dynamic Map Plot ---
-    st.subheader("Route Map (Approximate)")
-    all_coords = pd.DataFrame(locations, columns=["lat", "lon"])
-    st.map(all_coords)
+# Add locations markers
+for i, loc in enumerate(locations):
+    folium.Marker(location=loc, popup=f"Location {i+1}").add_to(m)
 
-    # --- Distance Matrix ---
-    st.subheader("Distance Matrix")
-    dist_matrix = compute_distance_matrix(locations)
-    df_matrix = pd.DataFrame(dist_matrix)
-    st.dataframe(df_matrix)
+# Display the map with locations
+st_folium(m, width=700, height=500, key="initial_map")
 
-    # --- Export Route as CSV ---
-    st.subheader("Export Routes as CSV")
-    routes = []
-    for i in range(num_vehicles):
-        vehicle_locs = [locations[individual] for j, individual in enumerate(hof[0]) if j % num_vehicles == i]
-        for idx, loc in enumerate(vehicle_locs):
-            routes.append({
-                "vehicle": i + 1,
-                "stop": idx + 1,
-                "lat": loc[0],
-                "lon": loc[1]
+# Calculate and plot routes for each vehicle
+if st.button("Calculate Routes"):
+    m = folium.Map(location=depot, zoom_start=6)
+    
+    # Add markers again (since we're creating a new map)
+    folium.Marker(location=depot, popup="Depot", icon=folium.Icon(color='red')).add_to(m)
+    for i, loc in enumerate(locations):
+        folium.Marker(location=loc, popup=f"Location {i+1}").add_to(m)
+    
+    # Assign locations to vehicles (simple round-robin assignment)
+    colors = ['blue', 'green', 'purple', 'orange', 'darkred', 'lightred', 'beige', 
+              'darkblue', 'darkgreen', 'cadetblue', 'pink', 'lightblue', 'lightgreen']
+    
+    vehicle_routes = []
+    
+    for vehicle_num in range(1, num_vehicles + 1):
+        # Get locations assigned to this vehicle
+        vehicle_locations = [depot] + [locations[i] for i in range(vehicle_num - 1, len(locations), num_vehicles)] + [depot]
+        
+        # Calculate the route for this vehicle
+        route_coords = []
+        for i in range(len(vehicle_locations) - 1):
+            start, end = vehicle_locations[i], vehicle_locations[i + 1]
+            route = get_route(start, end)
+            
+            if route['routes']:
+                route_coords.extend([(point[1], point[0]) for point in route['routes'][0]['geometry']['coordinates']])
+        
+        # Add the vehicle route polyline to the map
+        if route_coords:
+            folium.PolyLine(
+                route_coords, 
+                color=colors[vehicle_num % len(colors)], 
+                weight=2.5, 
+                opacity=1,
+                popup=f"Vehicle {vehicle_num}"
+            ).add_to(m)
+            
+            vehicle_routes.append({
+                'vehicle_num': vehicle_num,
+                'color': colors[vehicle_num % len(colors)],
+                'route_coords': route_coords
             })
-    df_routes = pd.DataFrame(routes)
-    st.dataframe(df_routes)
+    
+    # Store the routes in session state
+    st.session_state.calculated_routes = vehicle_routes
+    
+    # Display the map with routes
+    st_folium(m, width=700, height=500, key="routed_map")
 
-    csv = df_routes.to_csv(index=False).encode()
-    st.download_button("Download CSV", csv, "vrp_routes.csv", "text/csv")
-
+# If we have calculated routes, display them again (to prevent disappearance)
+if st.session_state.calculated_routes:
+    m = folium.Map(location=depot, zoom_start=6)
+    
+    # Add markers
+    folium.Marker(location=depot, popup="Depot", icon=folium.Icon(color='red')).add_to(m)
+    for i, loc in enumerate(locations):
+        folium.Marker(location=loc, popup=f"Location {i+1}").add_to(m)
+    
+    # Add stored routes
+    for route in st.session_state.calculated_routes:
+        folium.PolyLine(
+            route['route_coords'], 
+            color=route['color'], 
+            weight=2.5, 
+            opacity=1,
+            popup=f"Vehicle {route['vehicle_num']}"
+        ).add_to(m)
+    
+    st.write("### Calculated Routes:")
+    st_folium(m, width=700, height=500, key="persistent_routed_map")     .add_to(m)
+    
+    st.write("### Calculated Routes:")
+    st_folium(m, width=700, height=500, key="persistent_routed_map")     .add_to(m)
+    
+    st.write("### Calculated Routes:")
+    st_folium(m, width=700, height=500, key="persistent_routed_map")     .add_to(m)
+    
+    st.write("### Calculated Routes:")
+    st_folium(m, width=700, height=500, key="persistent_routed_map")     .add_to(m)
+    
+    st.write("### Calculated Routes:")
+    st_folium(m, width=700, height=500, key="persistent_routed_map")
